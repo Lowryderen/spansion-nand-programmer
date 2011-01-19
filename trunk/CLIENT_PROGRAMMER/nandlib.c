@@ -4,22 +4,22 @@
 
 int open_pic(char *str)
 {
-    return open_serial(str);
+    return open_serial_net(str, SERIAL_NET_PORT);
 }
 
 unsigned char read_pic(int fd)
 {
-    return read_serial(fd);
+    return read_serial_net(fd);
 }
 
 void write_pic(int fd, unsigned char data)
 {
-    write_serial(fd, data);
+    write_serial_net(fd, data);
 }
 
 void close_pic(int fd)
 {
-    close_serial(fd);
+    close_serial_net(fd);
 }
 
 // write data to the data bus on the PIC
