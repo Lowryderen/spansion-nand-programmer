@@ -37,6 +37,11 @@
 
 #define SERIAL_NET_PORT 2001
 
+int open_pic(char *str);
+unsigned char read_pic(int fd);
+void write_pic(int fd, unsigned char data);
+void close_pic(int fd);
+
 // sernetlib functions
 int open_serial_net(char *hostname, int portno);
 unsigned char read_serial_net(int fd);
