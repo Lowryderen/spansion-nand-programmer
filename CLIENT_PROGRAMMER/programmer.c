@@ -23,6 +23,7 @@ int main(int argc, char **argv)
     while(read_pic(fd) != CMD_ACK);
     printf("done\n");
 
+/*
     printf("Initializing NAND...\n");
     // put NAND chip into known state (reset)
     init_nand(fd);
@@ -31,8 +32,8 @@ int main(int argc, char **argv)
     printf("testind NAND read byte\n");
     data = read_byte_nand(fd, 0x0000);
     printf("read(%X) = %.2X\n", 0x0000, (unsigned int)data);
+*/
 
-/*
     while(1) {
         write_addr(fd, 0x000000);
         sleep(1);
@@ -49,7 +50,7 @@ int main(int argc, char **argv)
         write_addr(fd, 0x001100);
         sleep(1);
     }
-*/
+
 /*
     printf("Reading NAND device info...");
     // verify nand device info
