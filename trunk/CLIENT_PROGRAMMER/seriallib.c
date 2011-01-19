@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <termios.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -14,6 +15,11 @@ int open_serial(char *devname)
 {
     struct termios sset;
     int fd = open(devname, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    if (fd < 0)
+    {
+        printf("Error unable to open %s\n", devname);
+        exit(-1);
+    }
     sset.c_cflag = BAUD | CRTSCTS | DATABITS | STOPBITS | PARITYON | PARITY | CLOCAL | CREAD;
     sset.c_iflag = IGNPAR;
     sset.c_oflag = 0;

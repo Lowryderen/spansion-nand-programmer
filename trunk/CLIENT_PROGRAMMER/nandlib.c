@@ -2,51 +2,71 @@
 #include <unistd.h>
 #include "programmer.h"
 
+int open_pic(char *str)
+{
+    return open_serial(str);
+}
+
+unsigned char read_pic(int fd)
+{
+    return read_serial(fd);
+}
+
+void write_pic(int fd, unsigned char data)
+{
+    write_serial(fd, data);
+}
+
+void close_pic(int fd)
+{
+    close_serial(fd);
+}
+
 // write data to the data bus on the PIC
 void write_data(int fd, unsigned char d)
 {
-    write_serial_net(fd, CMD_DATAWR);
-    write_serial_net(fd, d);
-    while(read_serial_net(fd) != CMD_ACK);
+    write_pic(fd, CMD_DATAWR);
+    write_pic(fd, d);
+    while(read_pic(fd) != CMD_ACK);
 }
 
 // read data from the data bus on the pic
 unsigned char read_data(int fd)
 {
-    write_serial_net(fd, CMD_DATARD);
-    return read_serial_net(fd);
+    write_pic(fd, CMD_DATARD);
+    return read_pic(fd);
 }
 
 // write 24 bit address to array of latches connected to pic
 void write_addr(int fd, unsigned int addr)
 {
-    write_serial_net(fd, CMD_ADDR);
-    //while(read_serial_net(fd) != CMD_ACK);
+    write_pic(fd, CMD_ADDR);
+    //while(read_pic(fd) != CMD_ACK);
     // write A22 - A16
-    write_serial_net(fd, (unsigned char)((addr>>16)&0xFF));
-    //while(read_serial_net(fd) != CMD_ACK);
+    write_pic(fd, (unsigned char)((addr>>16)&0xFF));
+    //while(read_pic(fd) != CMD_ACK);
     // write A15 - A8
-    write_serial_net(fd, (unsigned char)((addr>>8)&0xFF));
-    //while(read_serial_net(fd) != CMD_ACK);
+    write_pic(fd, (unsigned char)((addr>>8)&0xFF));
+    //while(read_pic(fd) != CMD_ACK);
     // write A7 - A0
-    write_serial_net(fd, (unsigned char)(addr&0xFF));
-    while(read_serial_net(fd) != CMD_ACK);
+    write_pic(fd, (unsigned char)(addr&0xFF));
+    while(read_pic(fd) != CMD_ACK);
 }
 
 void set_mode(int fd, unsigned char mode)
 {
-    write_serial_net(fd, CMD_MODE);
-    //while(read_serial_net(fd) != CMD_ACK);
-    write_serial_net(fd, mode);
-    while(read_serial_net(fd) != CMD_ACK);
+    write_pic(fd, CMD_MODE);
+    //while(read_pic(fd) != CMD_ACK);
+    write_pic(fd, mode);
+    while(read_pic(fd) != CMD_ACK);
 }
 
 void init_nand(int fd)
 {
     set_mode(fd, CMD_MODE_WE); // WE=1, OE=0, CE=0
     write_addr(fd, 0x0000);
-    write_serial_net(fd, CMD_RESET);
-    while(read_serial_net(fd) != CMD_ACK);
+    write_pic(fd, CMD_RESET);
+    while(read_pic(fd) != CMD_ACK);
 }
 
 unsigned char read_byte_nand(int fd, unsigned int addr)
@@ -77,8 +97,8 @@ void write_byte_nand(int fd, unsigned int addr, unsigned char d)
     write_data(fd, d);
     // falling edge of WE triggers data write
     set_mode(fd, CMD_MODE_WE); // WE=1, OE=1, CE=0
-    set_mode(fd, 0x00); // WE=0, OE=0, CE=0
     usleep(100);
+    set_mode(fd, 0x00); // WE=0, OE=0, CE=0
 }
 
 // wait until NAND is in a ready state
@@ -86,9 +106,9 @@ void wait_rdy_nand(int fd)
 {
     do
     {
-        write_serial_net(fd, CMD_RDY);
+        write_pic(fd, CMD_RDY);
     }
-    while(!read_serial_net(fd));
+    while(!read_pic(fd));
 }
 
 void unlock_nand(int fd)
