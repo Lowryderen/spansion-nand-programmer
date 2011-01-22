@@ -238,35 +238,85 @@ void verify_all_hash_blocks(FILE *f)
      }
 }
 
+void write_file_data(FILE *inf, char *filename, unsigned int offset, unsigned int len)
+{
+    FILE *outf;
+    char c;
+    unsigned int i;
+    unsigned int back = ftell(inf);
+    fseek(inf, offset, SEEK_SET);
+    outf = fopen(filename, "wb");
+    for (i = 0; i < len; i++)
+    {
+        c = fgetc(inf);
+        fputc(c,outf);
+    }
+    fclose(outf);
+    fseek(inf, back, SEEK_SET);
+}
+
+void dump_files(FILE *f, char *dirname)
+{
+    int cnt, i;
+    unsigned int offset;
+    unsigned int blockoff = 0;
+    unsigned int start_block = 0;
+    FILE_INFO fileinfo;
+    char filepath[255];
+
+    sprintf(filepath, "%s/%s", dirname, "header.bin");
+    write_file_data(f, filepath, 0, 0x104); 
+
+    sprintf(filepath, "%s/%s", dirname, "hash.bin");
+    write_file_data(f, filepath, MASTER_HASH_OFFSET, 0x70);
+
+    // SUPD at 0x971A (12 bytes)
+    // 0xB000 - 0xBFFF is hash of blocks (can be recreated)
+    // 0xC000 - 0xCFFF is file info index (zero padded at end of file info)
+
+    fseek(f, FILE_HEADER_OFFSET, SEEK_SET); 
+    cnt = 0;
+    while (fgetc(f) == '$') {
+        fseek(f, 0x40-1, SEEK_CUR);
+        cnt++;
+    }
+
+    sprintf(filepath, "%s/%s", dirname, "file_index.bin");
+    write_file_data(f, filepath, FILE_HEADER_OFFSET, cnt * 0x40);
+
+    printf("%d files\n", cnt);
+
+    fseek(f, FILE_HEADER_OFFSET, SEEK_SET);
+
+    for(i = 0; i < cnt; i++)
+    {
+        fread(&fileinfo, 1, sizeof(FILE_INFO), f);
+        blockoff = get_cluster(fileinfo.start_block);
+        offset = FILE_START_OFFSET + (fileinfo.start_block + blockoff - 1) * 4096;
+
+        sprintf(filepath, "%s/%s", dirname, fileinfo.filename);
+
+        write_file_data(f, filepath, offset, fileinfo.len1 * BLOCK_SIZE);
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned char buf[256];
     char c1, c2;
     unsigned int diffpos, pos = 0;
     FILE *file;
-    if (argc < 2)
+    if (argc < 3)
     {
-        printf("sureader <xbox_su_file.bin>\n");
+        printf("sureader <xbox_su_file.bin> <output dir>\n");
         return 0;
     }
     file = fopen(argv[1], "rb");
     fread(buf, 1, 4, file);
     printf("update type: %c%c%c%c\n", buf[0], buf[1], buf[2], buf[3]);
-/*
-    // read 256 byte key?
-    fread(buf, 1, 256, file);
 
-    // skip 0x228 byte padding (0x00 with 8 byte 0xFF in middle)
-    fseek(file, 0x228, SEEK_CUR);
+    dump_files(file, argv[2]);
 
-    // 20 byte hash or "key" (160 bytes, most likely SHA1
-    fread(buf, 1, 20, file);
-
-    // length of encrypted or hashed data 4 bytes (big endian)
-    fread(buf, 1, 4, file);
-    // length of padding before next hash 2 bytes (big endian)
-    fread(buf, 1, 2, file);
-*/
     verify_hash("master", file, MASTER_HASH_OFFSET, HASH_DATA_START, HASH_DATA_LEN);
     verify_all_hash_blocks(file);
     print_file_list(file);
