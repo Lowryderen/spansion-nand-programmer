@@ -1,8 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <openssl/sha.h>
 
 #define MASTER_HASH_OFFSET 0x032C
+#define TOP_HASH_OFFSET 0x381
+
 #define HASH_DATA_START 0x344
 #define HASH_DATA_END 0xB000
 #define HASH_DATA_LEN (HASH_DATA_END-HASH_DATA_START)
@@ -18,6 +21,8 @@
 #define FILE_START_OFFSET 0xD000
 #define BLOCK_SIZE 0x1000
 
+#define SWAP32(x)((x>>24)|(x<<8)&0x00FF0000)|((x>>8)&0x0000FF00)|(x<<24)
+
 // each embedded file starts at a 4096 byte boundary
 typedef struct {
     // maximum filename length: 40 bytes
@@ -31,6 +36,15 @@ typedef struct {
     signed int update_timestamp; // uses FAT format
     signed int access_timestamp; // uses FAT format
 } __attribute__((packed)) FILE_INFO;
+
+unsigned int get_file_size(FILE *f)
+{
+    unsigned int val, back = ftell(f);
+    fseek(f, 0, SEEK_END);
+    val = ftell(f);
+    fseek(f, back, SEEK_SET);
+    return val;
+}
 
 unsigned int get_cluster(unsigned int block)
 {
@@ -47,28 +61,32 @@ unsigned int write_data_file(FILE *outf, char *dir, char *filename, unsigned int
     char filepath[255];
     FILE *inf;
     char c;
-    unsigned int cnt = 0;
+    unsigned int i;
+    unsigned int size = 0;
     fseek(outf, offset, SEEK_SET);
     sprintf(filepath, "%s/%s", dir, filename);
-    printf("writing %s to %X\n", filepath, offset);
+
     inf = fopen(filepath, "rb");
     if (inf == NULL)
     {
         printf("Error unable to open %s\n", filepath);
-        exit(-1);
+        return(-1);
     }
 
-    do
+    size = get_file_size(inf);
+
+    printf("writing %X bytes from %s to %X\n", size, filepath, offset);
+
+    for(i=0; i < size; i++)
     {
         c = fgetc(inf);
         fputc(c,outf);
-        cnt++;
-    } while (!feof(inf));
+    }
     fclose(inf);
-    return cnt;
+    return size;
 }
 
-write_zero_data(FILE *outf, unsigned int size)
+void write_zero_data(FILE *outf, unsigned int size)
 {
     unsigned char data[BLOCK_SIZE];
     memset(data, 0, BLOCK_SIZE);
@@ -80,11 +98,28 @@ write_zero_data(FILE *outf, unsigned int size)
     }
 }
 
+void write_misc_data(FILE *outf)
+{
+    unsigned char buf[128];
+
+    memset(buf, 0xFF, 8);
+    fseek(outf, 0x22C, SEEK_SET);
+    fwrite(buf, 1, 8, outf);
+
+    fseek(outf, 0x412, SEEK_SET);
+    memcpy(buf, "S\00y\00s\00t\00e\00m\00 \00U\00p\00d\00a\00t\00e\00", 26);
+    fwrite(buf, 1, 26, outf);
+
+    fseek(outf, 0x971A, SEEK_SET);
+    memcpy(buf, "SUPD\00\00\00\00\x20\x1A\x1B", 11);
+    fwrite(buf, 1, 11, outf);
+}
+
 void write_files(FILE *outf, char *dir)
 {
     unsigned int fileindex_size, blockoff=0, offset=0;
     unsigned char *fileindex = NULL;
-    unsigned int i;
+    unsigned int i, fsize;
     FILE_INFO fileinfo;    
     write_data_file(outf, dir, "header.bin", 0);
     write_data_file(outf, dir, "hash.bin", MASTER_HASH_OFFSET);
@@ -99,11 +134,117 @@ void write_files(FILE *outf, char *dir)
     {
         memcpy(&fileinfo, fileindex+i, sizeof(FILE_INFO));
         blockoff = get_cluster(fileinfo.start_block);
-        offset = FILE_START_OFFSET + (fileinfo.start_block + blockoff - 1) * 4096;
+        offset = FILE_START_OFFSET + (fileinfo.start_block + blockoff - 1) * BLOCK_SIZE;
 
-        write_data_file(outf, dir, fileinfo.filename, offset);
+        if (write_data_file(outf, dir, fileinfo.filename, offset) < 0) break;
+        fsize = SWAP32(fileinfo.fsize);
+        printf("%s file size: %X\n", fileinfo.filename, fsize);
     }
     free(fileindex);
+}
+
+void write_hash(FILE *f, unsigned int hashoff, unsigned int hash_data_start, unsigned int hash_data_len, unsigned int ID)
+{
+    unsigned char tmpdata[BLOCK_SIZE];
+    unsigned char tmphash[20];
+    unsigned int pos, len = hash_data_len;
+    SHA_CTX ctx;
+
+    //fseek(f, hash_data_start, SEEK_SET);
+    //fread(tmpdata, 1, hash_data_len, f);
+
+    // compute hash
+
+    if (hash_data_len != BLOCK_SIZE)
+    {
+    SHA1_Init(&ctx);
+    for(pos = 0; pos < hash_data_len; pos += BLOCK_SIZE)
+    {
+        fseek(f, hash_data_start+pos, SEEK_SET);
+        if (len >= BLOCK_SIZE) {
+            fread(tmpdata, 1, BLOCK_SIZE, f);
+            SHA1_Update(&ctx, tmpdata, BLOCK_SIZE);
+            len-=BLOCK_SIZE;
+        } else {
+            fread(tmpdata, 1, len, f);
+            SHA1_Update(&ctx, tmpdata, len);
+        }
+    }
+    SHA1_Final(tmphash, &ctx);
+    }
+    else
+    {
+        fseek(f, hash_data_start, SEEK_SET);
+        fread(tmpdata, 1, BLOCK_SIZE, f);
+        SHA1(tmpdata, hash_data_len, tmphash);
+    }
+
+    //SHA1(tmpdata, hash_data_len, tmphash);
+    fseek(f, hashoff, SEEK_SET);
+    fwrite(tmphash, 1, 20, f);
+    if (ID)
+    {
+        fwrite(&ID, 1, sizeof(unsigned int), f);
+    }
+}
+
+unsigned int get_id(FILE *f, unsigned int block)
+{
+    unsigned int end_block, val = block;
+    int fnum = 0;
+    FILE_INFO fileinfo;
+
+    if (block == 1) return 0x80FFFFFF;
+
+    while(1) {
+        fseek(f, FILE_HEADER_OFFSET+(fnum*0x40), SEEK_SET);
+        fread(&fileinfo, 1, sizeof(FILE_INFO), f);
+
+        if (fileinfo.filename[0] == 0x00) return 0;
+
+        end_block = fileinfo.start_block+fileinfo.len1-1;
+
+        if (block >= fileinfo.start_block && block <= end_block+1)
+        {
+            if (block == end_block+1) {
+                 val = 0x00FFFFFF;
+                 printf("block: %d\n", block);
+            }
+            break;
+        }
+
+        fnum++;
+    }
+
+    return (val | 0x80000000);
+}
+
+void write_all_hash_blocks(FILE *f, unsigned int filesize)
+{
+    unsigned int i, j=1, off;
+    unsigned int idval, block = 1;
+
+    off = BLOCK_HASH_START;
+    for(i = 0; i < 0xAA; i++)
+    {
+        idval = get_id(f, block);
+        write_hash(f, (off+24*i), (FILE_HEADER_OFFSET+(BLOCK_SIZE*i)), BLOCK_SIZE, SWAP32(idval));
+        block++;
+    }
+
+    while(1)
+    {
+         off = FILE_START_OFFSET + (0xAA * BLOCK_SIZE * j) + (BLOCK_SIZE * (j-1));
+         if (off > filesize) break;
+         for(i = 0; i < 0xAA; i++)
+         {
+             idval = get_id(f, block);
+             write_hash(f, (off+24*i), FILE_START_OFFSET+(BLOCK_SIZE*((0xAB*j)+i)), BLOCK_SIZE, SWAP32(idval));
+             block++;
+         }
+
+         j++;
+     }
 }
 
 int main(int argc, char **argv)
@@ -120,8 +261,16 @@ int main(int argc, char **argv)
     }
     file = fopen(argv[2], "w+b");
     output_size = atoi(argv[3]);
-    write_zero_data(file, output_size);
+
+    //    write_zero_data(file, output_size);
+
+    write_misc_data(file);
     write_files(file, argv[1]);
+    write_all_hash_blocks(file, output_size);
+    // write top hash table hash
+    //write_hash(file, TOP_HASH_OFFSET, BLOCK_HASH_START, BLOCK_SIZE, 0);
+    // write master hash
+    write_hash(file, MASTER_HASH_OFFSET, HASH_DATA_START, HASH_DATA_LEN, 0);
     fclose(file);
     return 0;
 }
