@@ -197,7 +197,7 @@ void print_file_list(FILE *f)
     while (1)
     {
         fread(&fileinfo, 1, sizeof(FILE_INFO), f);
-        if (fileinfo.filename[0] != '$') break;
+        if (fileinfo.filename[0] == 0x00) break;
 	fileinfo.namelen = fileinfo.namelen & 0x1F; // extract filename size
         blockoff = get_cluster(fileinfo.start_block);
         offset = FILE_START_OFFSET + (fileinfo.start_block + blockoff - 1) * 4096;
@@ -276,7 +276,7 @@ void dump_files(FILE *f, char *dirname)
 
     fseek(f, FILE_HEADER_OFFSET, SEEK_SET); 
     cnt = 0;
-    while (fgetc(f) == '$') {
+    while (fgetc(f) != 0x00) {
         fseek(f, 0x40-1, SEEK_CUR);
         cnt++;
     }
