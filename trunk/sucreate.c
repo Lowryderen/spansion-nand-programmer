@@ -15,6 +15,8 @@
 #define PEC_DATA_END 0x1000
 #define PEC_DATA_LEN (PEC_DATA_END-PEC_DATA_START)
 
+#define DASH_VERSION_OFFSET 0x971A
+
 #define BLOCK_HASH_START 0xB000
 #define FILE_HEADER_OFFSET 0xC000
 // start of file data described by file headers
@@ -110,9 +112,11 @@ void write_misc_data(FILE *outf)
     memcpy(buf, "S\00y\00s\00t\00e\00m\00 \00U\00p\00d\00a\00t\00e\00", 26);
     fwrite(buf, 1, 26, outf);
 
+/*
     fseek(outf, 0x971A, SEEK_SET);
     memcpy(buf, "SUPD\00\00\00\00\x20\x1A\x1B", 11);
     fwrite(buf, 1, 11, outf);
+*/
 }
 
 void write_files(FILE *outf, char *dir)
@@ -122,6 +126,7 @@ void write_files(FILE *outf, char *dir)
     unsigned int i, fsize;
     FILE_INFO fileinfo;    
     write_data_file(outf, dir, "header.bin", 0);
+    write_data_file(outf, dir, "version.bin", DASH_VERSION_OFFSET);
     write_data_file(outf, dir, "hash.bin", MASTER_HASH_OFFSET);
     fileindex_size = write_data_file(outf, dir, "file_index.bin", FILE_HEADER_OFFSET);
 
@@ -138,7 +143,7 @@ void write_files(FILE *outf, char *dir)
 
         if (write_data_file(outf, dir, fileinfo.filename, offset) < 0) break;
         fsize = SWAP32(fileinfo.fsize);
-        printf("%s file size: %X\n", fileinfo.filename, fsize);
+        //printf("%s file size: %X\n", fileinfo.filename, fsize);
     }
     free(fileindex);
 }
@@ -208,7 +213,6 @@ unsigned int get_id(FILE *f, unsigned int block)
         {
             if (block == end_block+1) {
                  val = 0x00FFFFFF;
-                 printf("block: %d\n", block);
             }
             break;
         }
