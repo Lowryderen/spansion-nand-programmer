@@ -35,8 +35,12 @@ int main(int argc, char **argv)
 */
 
     while(1) {
+        printf("Writing address loop...\n");
         write_addr(fd, 0x000000);
         sleep(1);
+        write_addr(fd, 0xFFFFFF);
+        sleep(1);
+/*
         write_addr(fd, 0x010101);
         sleep(1);
         write_addr(fd, 0x101010);
@@ -49,6 +53,7 @@ int main(int argc, char **argv)
         sleep(1);
         write_addr(fd, 0x001100);
         sleep(1);
+*/
     }
 
 /*

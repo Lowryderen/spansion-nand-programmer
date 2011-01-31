@@ -19,12 +19,14 @@ typedef struct {
     unsigned char cmd_code;
     unsigned short port;
     unsigned int ip_addr;
-} SOCK_HEADER;
+} __attribute__((packed)) SOCK_HEADER;
 
 SOCKET start_proxy_server(char *port)
 {
     SOCKET listenfd;
     struct addrinfo hints, *res, *p;  
+
+    printf("Starting proxy server on port %s...", port);
   
     // getaddrinfo for host  
     memset (&hints, 0, sizeof(hints));  
@@ -58,6 +60,9 @@ SOCKET start_proxy_server(char *port)
         perror("listen() error");  
         exit(1);  
     }  
+
+    printf("done\n");
+
     return listenfd;
 }
 
@@ -91,7 +96,9 @@ int connect_to_host(unsigned long iphost, unsigned short port, char *buf, int le
 
     if (connect(sockfd,(struct sockaddr *)&serv_addr,sizeof(serv_addr)) < 0)
     {
-        fprintf(stderr,"ERROR, no such host\n");
+        fprintf(stderr,"ERROR, no such host:", ntohl(iphost), ntohs(port));
+        print_ip_addr(iphost);
+        printf("port: %d\n", ntohs(port));
         exit(-2);
     }
 
@@ -109,23 +116,34 @@ int init_socks(int fd, unsigned long *ipaddr, unsigned short *port)
     SOCK_HEADER *sockhdr;
     char buf[BUFSIZE];
     int len = recv(fd,buf,BUFSIZE,0);
-    if (len == 0) return -1;
+    if (len == 0) return 0;
 
     sockhdr = (SOCK_HEADER*)buf;
     if (sockhdr->version == 0x04) {
         printf("SOCKS v4 client connected\n");
+    } else if (sockhdr->version == 0x05) {
+        printf("SOCKS v5 client connected, len = %d\n", len);
+        return 0;
+    } else {
+        printf("Unknown socks version %d, len %d\n", sockhdr->version, len);
+        //dump_packet(buf, "packet.bin", len);
+            *ipaddr = htonl(0x0911884C);
+            *port = htons(1533);
+
+        return 1;
     }
 
     *ipaddr = sockhdr->ip_addr;
     *port = sockhdr->port;
-    printf("requested port: %d\n", (unsigned int)ntohs(sockhdr->port));
+    //printf("requested port: %d\n", (unsigned int)ntohs(sockhdr->port));
     print_ip_addr(sockhdr->ip_addr);
 
     // send back request granted
     buf[0] = 0x00; buf[1] = 0x5A;
     if (send(fd, buf, 8, 0) != 8)
     {
-        printf("Failed to send SOCKS response\n");
+        //printf("Failed to send SOCKS response\n");
+        return 0;
     }
 
     return 1;
@@ -137,8 +155,11 @@ typedef struct
 {
     pthread_t tid;
     SOCKET s;
+    unsigned long clientip;
     unsigned long ipaddr;
     unsigned short port;
+    unsigned long fromaddr;
+    unsigned short fromport;
 } THREAD_DATA;
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -154,16 +175,27 @@ void *client_handler(void *arg)
     struct timeval tv;
     unsigned short port;
     unsigned long ipaddr;
+    unsigned short fromport;
 
     pthread_mutex_lock(&mutex);
     msg_socket = threads[thread_num].s;
+    fromport = ntohs(threads[thread_num].fromport);
     pthread_mutex_unlock(&mutex);
     tv.tv_sec = 0;
     tv.tv_usec = 0;
 
-    // init SOCKS v4 interface
-    init_socks(msg_socket, &ipaddr, &port);
-
+    if (fromport >= 8000 && fromport <= 8100) {
+        // init SOCKS v4 interface
+        if (!init_socks(msg_socket, &ipaddr, &port))
+        {
+            pthread_mutex_lock(&mutex);
+            threads[thread_num].s = 0;
+            threads[thread_num].tid = 0;
+            pthread_mutex_unlock(&mutex);
+            close(msg_socket);
+            return NULL;
+        }
+    }
     hostsock = connect_to_host(ipaddr, port, buf, len);
 
     flags = fcntl(msg_socket, F_GETFL, 0);
@@ -181,15 +213,18 @@ void *client_handler(void *arg)
         select(msg_socket+1,&read_set,NULL,NULL,&tv);
         if(FD_ISSET(msg_socket,&read_set)) {
             len = recv(msg_socket,buf,BUFSIZE,0);
-            printf("Received packet size %d from client\n", len);
+            //printf("Received packet size %d from client\n", len);
             if (len == 0) {
                 close(hostsock);
                 close(msg_socket);
                 break;
-            } else {
-                // forward to host
-                len = send(hostsock, buf, len, 0);
+            } else if (len < 0) {
+                printf("Error occurred while receiving packet from client\n");
+                exit(-4);
             }
+
+            // forward to host
+            len = send(hostsock, buf, len, 0);
         }
 
         // check for packet coming from host
@@ -201,8 +236,12 @@ void *client_handler(void *arg)
                 close(hostsock);
                 close(msg_socket);
                 break;
+            } else if (len < 0) {
+                printf("Error occurred while receiving packet from server\n");
+                exit(-5);
             }
-            printf("Received packet size %d from server\n", len);
+
+            //printf("Received packet size %d from server\n", len);
             // forward to client
             len = send(msg_socket, buf, len, 0);
         }
@@ -216,7 +255,7 @@ void *client_handler(void *arg)
     return NULL;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     SOCKET msg_socket = INVALID_SOCKET, listen_sock;
     struct sockaddr_in from;
@@ -224,10 +263,14 @@ int main(void)
     struct timeval tv;
     int i, fromlen, flags, thread_num;
 
+    if (argc < 2) {
+        printf("usage: proxy <port>\n");
+        return 0;
+    }
+
     memset(threads, 0, sizeof(THREAD_DATA)*MAX_THREAD_CNT);
 
-    printf("Starting proxy server...\n");
-    listen_sock = start_proxy_server("8001");
+    listen_sock = start_proxy_server(argv[1]);
 
     tv.tv_sec = 0;
     tv.tv_usec = 0;
@@ -242,7 +285,11 @@ int main(void)
         FD_ZERO(&read_set);
         FD_SET(listen_sock, &read_set);          
 
-        select(listen_sock+1,&read_set,NULL,NULL,&tv);
+        if (select(listen_sock+1,&read_set,NULL,NULL,&tv) < 0)
+        {
+            printf("Error during select()\n");
+            break;
+        }
         if(FD_ISSET(listen_sock,&read_set)) {
             printf("incoming connection...\n");
             // wait for user to connect
@@ -260,15 +307,19 @@ int main(void)
                     thread_num = i;
                     pthread_mutex_lock(&mutex);
                     threads[i].s = msg_socket;
+                    threads[i].fromaddr = from.sin_addr.s_addr;
+                    threads[i].fromport = from.sin_port;
                     if (pthread_create( &threads[i].tid, NULL, client_handler, &thread_num) ) {
                         pthread_mutex_unlock(&mutex);
-                        printf("error creating thread.\n");
+                        printf("error creating thread %d.\n", i);
                         exit(-1);
                     }
-                    else break;
+                    else {
+                        pthread_mutex_unlock(&mutex);
+                        break;
+                    }
                 }
             }
-            pthread_mutex_unlock(&mutex);
         }
     }
 
