@@ -8,10 +8,16 @@
 #define HASH_DATA_END 0xB000
 #define HASH_DATA_LEN (HASH_DATA_END-HASH_DATA_START)
 
+#define SECOND_HASH_OFFSET 0x0381
+#define SECOND_HASH_START 0xB6000
+// SECOND_HASH_LEN is BLOCK_SIZE
+
 #define PEC_HASH_OFFSET 0x228
 #define PEC_DATA_START 0x23C
 #define PEC_DATA_END 0x1000
 #define PEC_DATA_LEN (PEC_DATA_END-PEC_DATA_START)
+
+#define DASH_VERSION_OFFSET 0x971A
 
 #define BLOCK_HASH_START 0xB000
 #define FILE_HEADER_OFFSET 0xC000
@@ -130,11 +136,11 @@ void verify_hash(char *name, FILE *f, unsigned int hashoff, unsigned int hash_da
     SHA1(tmpdata, hash_data_len, tmphash);
     if (!memcmp(hash, tmphash, 20))
     {
-        printf("HASH %s MATCHES!\n", name);
+        //printf("HASH %s MATCHES!\n", name);
     }
     else
     {
-        printf("hash %s doesn't match\n", name);
+        printf("hash %s doesn't match: hashoff = %X data start = %X data len=%X\n", name, hashoff, hash_data_start, hash_data_len);
         //printf("hash1: ");
         //print_data(hash, 20);
         //printf("hash2: ");
@@ -219,8 +225,15 @@ void print_file_list(FILE *f)
 
 void verify_all_hash_blocks(FILE *f)
 {
-    unsigned int i, j=1, off;
+    unsigned int i, j=1, off, blockoff;
     unsigned int filesize = get_file_size(f);
+
+    off = BLOCK_HASH_START;
+
+    for(i = 0; i < 0xAA; i++)
+    {
+        verify_hash("block", f, (off+24*i), (FILE_HEADER_OFFSET+(BLOCK_SIZE*i)), BLOCK_SIZE);
+    }
 
     //jmax = (((off - FILE_START_OFFSET)/BLOCK_SIZE + 1)/0xAB);
 
@@ -228,10 +241,12 @@ void verify_all_hash_blocks(FILE *f)
     {
          off = FILE_START_OFFSET + (0xAA * BLOCK_SIZE * j) + (BLOCK_SIZE * (j-1));
          if (off > filesize) break;
-         printf("off %X\n", off);
-         for(i = 0; i < 1; i++)
+
+         for(i = 0; i < 0xAA; i++)
          {
-             verify_hash("block", f, (off+24*i), FILE_START_OFFSET+(BLOCK_SIZE*((0xAB*j)+i)), BLOCK_SIZE);
+             blockoff = FILE_START_OFFSET+(BLOCK_SIZE*((0xAB*j)+i));
+             if (blockoff > (filesize-1)) break;
+             verify_hash("block", f, (off+24*i), blockoff, BLOCK_SIZE);
          }
  
          j++;
@@ -270,7 +285,10 @@ void dump_files(FILE *f, char *dirname)
     sprintf(filepath, "%s/%s", dirname, "hash.bin");
     write_file_data(f, filepath, MASTER_HASH_OFFSET, 0x70);
 
-    // SUPD at 0x971A (12 bytes)
+    // SUPD at 0x971A (12 bytes) - contains dashboard version
+    sprintf(filepath, "%s/%s", dirname, "version.bin");
+    write_file_data(f, filepath, DASH_VERSION_OFFSET, 12);
+
     // 0xB000 - 0xBFFF is hash of blocks (can be recreated)
     // 0xC000 - 0xCFFF is file info index (zero padded at end of file info)
 
@@ -292,7 +310,7 @@ void dump_files(FILE *f, char *dirname)
     {
         fread(&fileinfo, 1, sizeof(FILE_INFO), f);
         blockoff = get_cluster(fileinfo.start_block);
-        offset = FILE_START_OFFSET + (fileinfo.start_block + blockoff - 1) * 4096;
+        offset = FILE_START_OFFSET + (fileinfo.start_block + blockoff - 1) * BLOCK_SIZE;
 
         sprintf(filepath, "%s/%s", dirname, fileinfo.filename);
 
@@ -318,8 +336,13 @@ int main(int argc, char **argv)
     dump_files(file, argv[2]);
 
     verify_hash("master", file, MASTER_HASH_OFFSET, HASH_DATA_START, HASH_DATA_LEN);
+    printf("Verified master hash\n");
+    // verify second hash (hash of hash table)
+    verify_hash("second", file, SECOND_HASH_OFFSET, SECOND_HASH_START, BLOCK_SIZE); 
+    printf("Verified second hash\n");
     verify_all_hash_blocks(file);
-    print_file_list(file);
+    printf("Verified all file hash blocks\n");
+    //print_file_list(file);
     fclose(file);
     return 0;
 }
