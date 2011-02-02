@@ -4,11 +4,13 @@
 #include <openssl/sha.h>
 
 #define MASTER_HASH_OFFSET 0x032C
-#define TOP_HASH_OFFSET 0x381
-
 #define HASH_DATA_START 0x344
 #define HASH_DATA_END 0xB000
 #define HASH_DATA_LEN (HASH_DATA_END-HASH_DATA_START)
+
+#define SECOND_HASH_OFFSET 0x0381
+#define SECOND_HASH_START 0xB6000
+// SECOND_HASH_LEN is BLOCK_SIZE
 
 #define PEC_HASH_OFFSET 0x228
 #define PEC_DATA_START 0x23C
@@ -225,7 +227,7 @@ unsigned int get_id(FILE *f, unsigned int block)
 
 void write_all_hash_blocks(FILE *f, unsigned int filesize)
 {
-    unsigned int i, j=1, off;
+    unsigned int i, j=1, off, blockoff;
     unsigned int idval, block = 1;
 
     off = BLOCK_HASH_START;
@@ -243,7 +245,11 @@ void write_all_hash_blocks(FILE *f, unsigned int filesize)
          for(i = 0; i < 0xAA; i++)
          {
              idval = get_id(f, block);
-             write_hash(f, (off+24*i), FILE_START_OFFSET+(BLOCK_SIZE*((0xAB*j)+i)), BLOCK_SIZE, SWAP32(idval));
+
+             blockoff = FILE_START_OFFSET+(BLOCK_SIZE*((0xAB*j)+i));
+             if (blockoff > (filesize-1)) break;
+
+             write_hash(f, (off+24*i), blockoff, BLOCK_SIZE, SWAP32(idval));
              block++;
          }
 
@@ -271,8 +277,8 @@ int main(int argc, char **argv)
     write_misc_data(file);
     write_files(file, argv[1]);
     write_all_hash_blocks(file, output_size);
-    // write top hash table hash
-    //write_hash(file, TOP_HASH_OFFSET, BLOCK_HASH_START, BLOCK_SIZE, 0);
+    //write top hash table hash
+    write_hash(file, SECOND_HASH_OFFSET, SECOND_HASH_START, BLOCK_SIZE, 0);
     // write master hash
     write_hash(file, MASTER_HASH_OFFSET, HASH_DATA_START, HASH_DATA_LEN, 0);
     fclose(file);
