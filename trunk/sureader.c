@@ -8,6 +8,7 @@
 #define HASH_DATA_END 0xB000
 #define HASH_DATA_LEN (HASH_DATA_END-HASH_DATA_START)
 
+// master hash table
 #define SECOND_HASH_OFFSET 0x0381
 #define SECOND_HASH_START 0xB6000
 // SECOND_HASH_LEN is BLOCK_SIZE
@@ -117,9 +118,26 @@ unsigned int get_file_size(FILE *f)
     return val;
 }
 
+int verify_hash_block(FILE *f, unsigned int hashoff, unsigned int hash_data_start)
+{
+    unsigned char tmpdata[BLOCK_SIZE];
+    unsigned char hash[20], tmphash[20];
+
+    fseek(f, hashoff, SEEK_SET);
+    fread(hash, 1, 20, f);
+    fseek(f, hash_data_start, SEEK_SET);
+    fread(tmpdata, 1, BLOCK_SIZE, f);
+
+    memset(tmphash, 20, 0);
+    // compute hash
+    SHA1(tmpdata, BLOCK_SIZE, tmphash);
+    if (!memcmp(hash, tmphash, 20)) return 1;
+    return 0;
+}
+
 void verify_hash(char *name, FILE *f, unsigned int hashoff, unsigned int hash_data_start, unsigned int hash_data_len)
 {
-    unsigned char *tmpdata = NULL; //[HASH_DATA_LEN];
+    unsigned char *tmpdata = NULL;
     unsigned char hash[20], tmphash[20];
 
     tmpdata = malloc(hash_data_len);
@@ -140,13 +158,8 @@ void verify_hash(char *name, FILE *f, unsigned int hashoff, unsigned int hash_da
     }
     else
     {
-        printf("hash %s doesn't match: hashoff = %X data start = %X data len=%X\n", name, hashoff, hash_data_start, hash_data_len);
-        //printf("hash1: ");
-        //print_data(hash, 20);
-        //printf("hash2: ");
-        //print_data(tmphash, 20);
+        //printf("hash %s doesn't match: hashoff = %X data start = %X data len=%X\n", name, hashoff, hash_data_start, hash_data_len);
     }
-
     free(tmpdata);
 }
 
@@ -232,21 +245,22 @@ void verify_all_hash_blocks(FILE *f)
 
     for(i = 0; i < 0xAA; i++)
     {
-        verify_hash("block", f, (off+24*i), (FILE_HEADER_OFFSET+(BLOCK_SIZE*i)), BLOCK_SIZE);
+        verify_hash_block(f, (off+24*i), (FILE_HEADER_OFFSET+(BLOCK_SIZE*i))); //, BLOCK_SIZE);
     }
 
     //jmax = (((off - FILE_START_OFFSET)/BLOCK_SIZE + 1)/0xAB);
 
     while(1)
     {
+
          off = FILE_START_OFFSET + (0xAA * BLOCK_SIZE * j) + (BLOCK_SIZE * (j-1));
          if (off > filesize) break;
-
+         //printf("off=%X\n", off);
          for(i = 0; i < 0xAA; i++)
          {
              blockoff = FILE_START_OFFSET+(BLOCK_SIZE*((0xAB*j)+i));
              if (blockoff > (filesize-1)) break;
-             verify_hash("block", f, (off+24*i), blockoff, BLOCK_SIZE);
+             verify_hash_block(f, (off+24*i), blockoff); //, BLOCK_SIZE);
          }
  
          j++;
@@ -318,6 +332,52 @@ void dump_files(FILE *f, char *dirname)
     }
 }
 
+void find_hash_block(FILE *f, unsigned int pos)
+{
+    unsigned int i=0;
+    while(1)
+    {
+        if (verify_hash_block(f, SECOND_HASH_START+24*pos, i * BLOCK_SIZE))
+        {
+            printf("Found block %d at 0x%X\n", pos, i * BLOCK_SIZE);
+            break;
+        }
+        i++;
+    }
+}
+
+// verify the master hash table
+void verify_master_hash_table(FILE *f)
+{
+    unsigned int i = 1;
+    unsigned int off, blockoff;
+    unsigned int filesize = get_file_size(f);
+
+    printf("filesize: %d\n", filesize);
+
+    off = SECOND_HASH_START;
+    blockoff = BLOCK_HASH_START;
+    if (!verify_hash_block(f, off, blockoff))
+    {
+        printf("Failed to verify hash at 0x%X of block at 0x%X\n", off, blockoff);
+        return;
+    }
+
+    while(1)
+    {
+        off = SECOND_HASH_START + i * 24;
+        blockoff = FILE_START_OFFSET + (0xAA * BLOCK_SIZE * i) + (BLOCK_SIZE * (i-1));
+        if (blockoff > (filesize-1)) break;
+
+        if (!verify_hash_block(f, off, blockoff))
+        {
+            printf("Failed to verify hash at 0x%X of block at 0x%X\n", off, blockoff);
+            break;
+        }
+        i++;
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned char buf[256];
@@ -338,8 +398,10 @@ int main(int argc, char **argv)
     verify_hash("master", file, MASTER_HASH_OFFSET, HASH_DATA_START, HASH_DATA_LEN);
     printf("Verified master hash\n");
     // verify second hash (hash of hash table)
-    verify_hash("second", file, SECOND_HASH_OFFSET, SECOND_HASH_START, BLOCK_SIZE); 
-    printf("Verified second hash\n");
+    if (verify_hash_block(file, SECOND_HASH_OFFSET, SECOND_HASH_START)) //, BLOCK_SIZE);
+        printf("Verified second hash\n");
+    verify_master_hash_table(file);
+    printf("Verified master hash table\n");
     verify_all_hash_blocks(file);
     printf("Verified all file hash blocks\n");
     //print_file_list(file);
