@@ -189,7 +189,7 @@ void write_hash(FILE *f, unsigned int hashoff, unsigned int hash_data_start, uns
     //SHA1(tmpdata, hash_data_len, tmphash);
     fseek(f, hashoff, SEEK_SET);
     fwrite(tmphash, 1, 20, f);
-    if (ID)
+    if (ID != 0x01)
     {
         fwrite(&ID, 1, sizeof(unsigned int), f);
     }
@@ -257,6 +257,28 @@ void write_all_hash_blocks(FILE *f, unsigned int filesize)
      }
 }
 
+// write the master hash table
+void write_master_hash_table(FILE *f)
+{
+    unsigned int i = 1;
+    unsigned int off, blockoff;
+    unsigned int filesize = get_file_size(f);
+
+    off = SECOND_HASH_START;
+    blockoff = BLOCK_HASH_START;
+    write_hash(f, off, blockoff, BLOCK_SIZE, 1);
+
+    while(1)
+    {
+        off = SECOND_HASH_START + i * 24;
+        blockoff = FILE_START_OFFSET + (0xAA * BLOCK_SIZE * i) + (BLOCK_SIZE * (i-1));
+        if (blockoff > (filesize-1)) break;
+
+        write_hash(f, off, blockoff, BLOCK_SIZE, 0);
+        i++;
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned int output_size;
@@ -273,14 +295,15 @@ int main(int argc, char **argv)
     output_size = atoi(argv[3]);
 
     //    write_zero_data(file, output_size);
-
     write_misc_data(file);
     write_files(file, argv[1]);
     write_all_hash_blocks(file, output_size);
+    // write hash of all hash blocks (master hash table)
+    write_master_hash_table(file);
     //write top hash table hash
-    write_hash(file, SECOND_HASH_OFFSET, SECOND_HASH_START, BLOCK_SIZE, 0);
+    write_hash(file, SECOND_HASH_OFFSET, SECOND_HASH_START, BLOCK_SIZE, 1);
     // write master hash
-    write_hash(file, MASTER_HASH_OFFSET, HASH_DATA_START, HASH_DATA_LEN, 0);
+    write_hash(file, MASTER_HASH_OFFSET, HASH_DATA_START, HASH_DATA_LEN, 1);
     fclose(file);
     return 0;
 }
